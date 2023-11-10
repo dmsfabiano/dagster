@@ -853,7 +853,14 @@ class GrapheneAssetNode(graphene.ObjectType):
     def resolve_currentAutoMaterializeEvaluationId(self, graphene_info):
         from dagster._daemon.asset_daemon import get_current_evaluation_id
 
-        return get_current_evaluation_id(graphene_info.context.instance)
+        instance = graphene_info.context.instance
+        settings = instance.get_settings("auto_materialize")
+        if settings.get("use_evaluation_groups"):
+            group_name = self._external_asset_node.auto_materialize_evaluation_group_name
+        else:
+            group_name = None
+
+        return get_current_evaluation_id(graphene_info.context.instance, group_name=group_name)
 
     def resolve_backfillPolicy(
         self, _graphene_info: ResolveInfo
