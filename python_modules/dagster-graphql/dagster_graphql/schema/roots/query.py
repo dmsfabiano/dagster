@@ -522,6 +522,7 @@ class GrapheneQuery(graphene.ObjectType):
         statuses=graphene.List(graphene.NonNull(GrapheneInstigationTickStatus)),
         beforeTimestamp=graphene.Float(),
         afterTimestamp=graphene.Float(),
+        evaluationGroupName=graphene.String()
         description="Fetch the history of auto-materialization ticks",
     )
 
@@ -1102,19 +1103,18 @@ class GrapheneQuery(graphene.ObjectType):
         statuses=None,
         beforeTimestamp=None,
         afterTimestamp=None,
+        evaluationGroupName=None,
     ):
         from dagster._daemon.asset_daemon import (
             get_amp_origin_id,
             get_amp_selector_id,
         )
 
-        # TODO Split out by evaluation group
-
         return get_instigation_ticks(
             graphene_info=graphene_info,
             instigator_type=InstigatorType.AUTO_MATERIALIZE,
-            instigator_origin_id=get_amp_origin_id(None),
-            selector_id=get_amp_selector_id(None),
+            instigator_origin_id=get_amp_origin_id(evaluationGroupName),
+            selector_id=get_amp_selector_id(evaluationGroupName),
             batch_loader=None,
             dayRange=dayRange,
             dayOffset=dayOffset,

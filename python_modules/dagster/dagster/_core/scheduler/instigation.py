@@ -75,6 +75,16 @@ class DynamicPartitionsRequestResult(
             check.sequence_param(skipped_partitions, "skipped_partitions"),
         )
 
+@whitelist_for_serdes
+class AutoMaterializeInstigatorData(
+    NamedTuple(
+        "_AutoMaterializeInstigatorData",
+        [
+            "group_name", Optional[str],
+            "cursor", Optional[AutoMateriali]
+        ]
+    )
+)
 
 @whitelist_for_serdes(old_storage_names={"SensorJobData"})
 class SensorInstigatorData(

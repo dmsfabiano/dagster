@@ -432,7 +432,6 @@ class AssetDaemon(DagsterDaemon):
         num_target_assets = len(target_asset_keys)
 
         # TODO Where do these auto-observe assets fit? For now leave them out when things are split out by asset groups
-
         if not group_name:
             auto_observe_assets = [
                 key
