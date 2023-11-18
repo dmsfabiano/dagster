@@ -855,8 +855,8 @@ class GrapheneAssetNode(graphene.ObjectType):
 
         instance = graphene_info.context.instance
         settings = instance.get_settings("auto_materialize")
-        if settings.get("use_evaluation_groups"):
-            group_name = self._external_asset_node.auto_materialize_evaluation_group_name
+        if settings.get("use_asset_schedulers"):
+            group_name = self._external_asset_node.asset_scheduler_name
         else:
             group_name = None
 

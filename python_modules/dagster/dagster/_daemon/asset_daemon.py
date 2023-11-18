@@ -337,7 +337,7 @@ class AssetDaemon(DagsterDaemon):
         settings = instance.get_settings("auto_materialize")
         group_names: Set[Optional[str]]
 
-        if settings.get("use_evaluation_groups"):
+        if settings.get("use_asset_schedulers"):
             # TODO This will come from the policies, not the asset groups
             group_names = set(asset_graph.group_names_by_key.values())
         else:
