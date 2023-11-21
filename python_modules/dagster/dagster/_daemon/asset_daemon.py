@@ -243,10 +243,19 @@ class AssetDaemon(DagsterDaemon):
         self,
         instance: DagsterInstance,
         asset_graph: ExternalAssetGraph,
-        group_names: Set[Optional[str]],
     ):
         # Find the largest stored evaluation ID across all cursors
         with self._evaluation_id_lock:
+            all_auto_materialize_states = instance.schedule_storage.all_instigator_state(
+                instigator_type=InstigatorType.AUTO_MATERIALIZE
+            )
+
+            group_names = {
+
+            }
+
+            raw_cursor =
+
             self._next_evaluation_id = 0
             for group_name in {*group_names, None}:
                 raw_cursor = _get_raw_cursor(instance, group_name)
@@ -350,7 +359,7 @@ class AssetDaemon(DagsterDaemon):
             return
 
         if not self._initialized_evaluation_id:
-            self._initialize_evaluation_id(instance, asset_graph, group_names)
+            self._initialize_evaluation_id(instance, asset_graph)
             self._initialized_evaluation_id = True
 
         for group_name in group_names:
