@@ -75,16 +75,28 @@ class DynamicPartitionsRequestResult(
             check.sequence_param(skipped_partitions, "skipped_partitions"),
         )
 
+
 @whitelist_for_serdes
 class AutoMaterializeInstigatorData(
     NamedTuple(
         "_AutoMaterializeInstigatorData",
         [
-            "group_name", Optional[str],
-            "cursor", Optional[AutoMateriali]
-        ]
+            (
+                "serialized_cursor",
+                Optional[str],
+            ),  # Make this a AssetDaemonCursor NamedTuple before shipping this, once that is a valid NamedTuple
+        ],
     )
-)
+):
+    def __new__(
+        cls,
+        serialized_cursor: Optional[str],
+    ):
+        return super(AutoMaterializeInstigatorData, cls).__new__(
+            cls,
+            serialized_cursor=serialized_cursor,
+        )
+
 
 @whitelist_for_serdes(old_storage_names={"SensorJobData"})
 class SensorInstigatorData(
@@ -164,10 +176,7 @@ def check_instigator_data(
     elif instigator_type == InstigatorType.SENSOR:
         check.opt_inst_param(instigator_data, "instigator_data", SensorInstigatorData)
     else:
-        check.failed(
-            f"Unexpected instigator type {instigator_type}, expected one of InstigatorType.SENSOR,"
-            " InstigatorType.SCHEDULE"
-        )
+        check.opt_inst_param(instigator_data, "instigator_data", AutoMaterializeInstigatorData)
 
     return instigator_data
 

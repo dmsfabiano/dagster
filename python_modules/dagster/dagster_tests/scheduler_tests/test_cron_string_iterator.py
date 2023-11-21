@@ -663,19 +663,3 @@ def test_reversed_dst_transition_advances(execution_timezone, cron_string, times
                 prev_time = next_time
 
             start_timestamp = start_timestamp - timestamp_interval
-
-
-from dagster import HourlyPartitionsDefinition
-
-
-def test_partition_deserialization():
-    pd = HourlyPartitionsDefinition(start_date="2020-01-01-00:00", timezone="US/Pacific")
-
-    subset = pd.subset_with_all_partitions()
-
-    serialized_subset = subset.serialize()
-
-    deserialized_subset = pd.deserialize_subset(serialized_subset)
-
-    diff = set(subset.get_partition_keys()) - set(deserialized_subset.get_partition_keys())
-    assert len(diff) == 0

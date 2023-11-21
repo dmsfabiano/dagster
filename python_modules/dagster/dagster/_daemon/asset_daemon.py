@@ -67,25 +67,25 @@ _FIXED_AUTO_MATERIALIZATION_INSTIGATOR_NAME = "asset_daemon"
 MIN_INTERVAL_LOOP_TIME = 5
 
 
-def get_amp_origin_id(group_name: Optional[str]) -> str:
-    if not group_name:
+def get_amp_origin_id(automator_name: Optional[str]) -> str:
+    if not automator_name:
         return _FIXED_AUTO_MATERIALIZATION_ORIGIN_ID
     else:
-        return f"{_FIXED_AUTO_MATERIALIZATION_ORIGIN_ID}_{group_name}"
+        return f"{_FIXED_AUTO_MATERIALIZATION_ORIGIN_ID}_{automator_name}"
 
 
-def get_amp_selector_id(group_name: Optional[str]) -> str:
-    if not group_name:
+def get_amp_selector_id(automator_name: Optional[str]) -> str:
+    if not automator_name:
         return _FIXED_AUTO_MATERIALIZATION_SELECTOR_ID
     else:
-        return f"{_FIXED_AUTO_MATERIALIZATION_SELECTOR_ID}_{group_name}"
+        return f"{_FIXED_AUTO_MATERIALIZATION_SELECTOR_ID}_{automator_name}"
 
 
-def get_amp_instigator_name(group_name: Optional[str]) -> str:
-    if not group_name:
+def get_amp_instigator_name(automator_name: Optional[str]) -> str:
+    if not automator_name:
         return _FIXED_AUTO_MATERIALIZATION_INSTIGATOR_NAME
     else:
-        return f"{_FIXED_AUTO_MATERIALIZATION_INSTIGATOR_NAME}_{group_name}"
+        return automator_name
 
 
 def get_auto_materialize_paused(instance: DagsterInstance) -> bool:
@@ -114,9 +114,9 @@ def _get_raw_cursor(instance: DagsterInstance, group_name: Optional[str]) -> Opt
 
 
 def get_current_evaluation_id(
-    instance: DagsterInstance, group_name: Optional[str]
+    instance: DagsterInstance, automator_name: Optional[str]
 ) -> Optional[int]:
-    raw_cursor = _get_raw_cursor(instance, group_name)
+    raw_cursor = _get_raw_cursor(instance, automator_name)
     return AssetDaemonCursor.get_evaluation_id_from_serialized(raw_cursor) if raw_cursor else None
 
 
@@ -337,7 +337,7 @@ class AssetDaemon(DagsterDaemon):
         settings = instance.get_settings("auto_materialize")
         group_names: Set[Optional[str]]
 
-        if settings.get("use_asset_schedulers"):
+        if settings.get("use_asset_automators"):
             # TODO This will come from the policies, not the asset groups
             group_names = set(asset_graph.group_names_by_key.values())
         else:

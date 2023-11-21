@@ -23,7 +23,6 @@ def build_assets(
     id: str,
     layer_configs: Sequence[AssetLayerConfig],
     auto_materialize_policy: AutoMaterializePolicy = AutoMaterializePolicy.eager(),
-    group_name: Optional[str] = None,
 ) -> List[AssetsDefinition]:
     layers = []
 
@@ -47,7 +46,6 @@ def build_assets(
                 name=f"{id}_{len(layers)}_{i}",
                 auto_materialize_policy=auto_materialize_policy,
                 non_argument_deps=non_argument_deps,
-                group_name=group_name,
             )
             def _asset():
                 pass
@@ -76,7 +74,6 @@ def auto_materialize_large_time_graph():
             AssetLayerConfig(n_assets=100, n_upstreams_per_asset=4, partitions_def=daily),
             AssetLayerConfig(n_assets=100, n_upstreams_per_asset=4, partitions_def=daily),
         ],
-        group_name="large_time",
     )
 
 
@@ -91,5 +88,4 @@ def auto_materialize_large_static_graph():
             AssetLayerConfig(n_assets=100, n_upstreams_per_asset=4, partitions_def=static),
             AssetLayerConfig(n_assets=100, n_upstreams_per_asset=4, partitions_def=None),
         ],
-        group_name="large_static",
     )

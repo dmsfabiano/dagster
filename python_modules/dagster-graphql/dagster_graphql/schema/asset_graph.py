@@ -855,12 +855,17 @@ class GrapheneAssetNode(graphene.ObjectType):
 
         instance = graphene_info.context.instance
         settings = instance.get_settings("auto_materialize")
-        if settings.get("use_asset_schedulers"):
-            group_name = self._external_asset_node.asset_scheduler_name
-        else:
-            group_name = None
+        if settings.get("use_asset_automators"):
+            policy = self._external_asset_node.auto_materialize_policy
+            if not policy:
+                return None
 
-        return get_current_evaluation_id(graphene_info.context.instance, group_name=group_name)
+            automator_name = policy.automator_name or self._repository_location.name
+            return get_current_evaluation_id(
+                graphene_info.context.instance, automator_name=automator_name
+            )
+        else:
+            return get_current_evaluation_id(graphene_info.context.instance, automator_name=None)
 
     def resolve_backfillPolicy(
         self, _graphene_info: ResolveInfo
