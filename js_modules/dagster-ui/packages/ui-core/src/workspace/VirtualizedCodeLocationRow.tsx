@@ -30,54 +30,57 @@ const TEMPLATE_COLUMNS = '3fr 1fr 1fr 240px 160px';
 
 interface ErrorRowProps {
   locationNode: WorkspaceRepositoryLocationNode;
-  measure: (node: Element | null) => void;
+  index: number;
 }
 
-export const VirtualizedCodeLocationErrorRow = (props: ErrorRowProps) => {
-  const {locationNode, measure} = props;
-  const {name} = locationNode;
-  return (
-    <div ref={measure}>
-      <RowGrid border="bottom">
-        <RowCell>
-          <MiddleTruncate text={name} />
-        </RowCell>
-        <RowCell>
-          <div>
-            <LocationStatus location={name} locationOrError={locationNode} />
-          </div>
-        </RowCell>
-        <RowCell>
-          <div style={{whiteSpace: 'nowrap'}}>
-            <TimeFromNow unixTimestamp={locationNode.updatedTimestamp} />
-          </div>
-        </RowCell>
-        <RowCell>{'\u2013'}</RowCell>
-        <RowCell>
-          <JoinedButtons>
-            <ReloadButton location={name} />
-            <CodeLocationMenu locationNode={locationNode} />
-          </JoinedButtons>
-        </RowCell>
-      </RowGrid>
-    </div>
-  );
-};
+export const VirtualizedCodeLocationErrorRow = React.forwardRef(
+  (props: ErrorRowProps, ref: any) => {
+    const {locationNode, index} = props;
+    const {name} = locationNode;
+    return (
+      <div ref={ref} data-index={index}>
+        <RowGrid border="bottom">
+          <RowCell>
+            <MiddleTruncate text={name} />
+          </RowCell>
+          <RowCell>
+            <div>
+              <LocationStatus location={name} locationOrError={locationNode} />
+            </div>
+          </RowCell>
+          <RowCell>
+            <div style={{whiteSpace: 'nowrap'}}>
+              <TimeFromNow unixTimestamp={locationNode.updatedTimestamp} />
+            </div>
+          </RowCell>
+          <RowCell>{'\u2013'}</RowCell>
+          <RowCell>
+            <JoinedButtons>
+              <ReloadButton location={name} />
+              <CodeLocationMenu locationNode={locationNode} />
+            </JoinedButtons>
+          </RowCell>
+        </RowGrid>
+      </div>
+    );
+  },
+);
 
 interface Props {
   codeLocation: WorkspaceRepositoryLocationNode;
   repository: WorkspaceRepositoryFragment;
-  measure: (node: Element | null) => void;
+  index: number;
+  // measure: (node: Element | null) => void;
 }
 
-export const VirtualizedCodeLocationRow = (props: Props) => {
-  const {codeLocation, repository, measure} = props;
+export const VirtualizedCodeLocationRow = React.forwardRef((props: Props, ref: any) => {
+  const {codeLocation, repository, index} = props;
   const repoAddress = buildRepoAddress(repository.name, repository.location.name);
 
   const allMetadata = [...codeLocation.displayMetadata, ...repository.displayMetadata];
 
   return (
-    <div ref={measure}>
+    <div ref={ref} data-index={index}>
       <RowGrid border="bottom">
         <RowCell>
           <Box flex={{direction: 'column', gap: 4}}>
@@ -112,7 +115,7 @@ export const VirtualizedCodeLocationRow = (props: Props) => {
       </RowGrid>
     </div>
   );
-};
+});
 
 export const VirtualizedCodeLocationHeader = () => {
   return (
