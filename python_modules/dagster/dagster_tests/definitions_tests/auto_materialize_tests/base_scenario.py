@@ -526,7 +526,11 @@ class AssetReconciliationScenario(
                 try:
                     list(
                         AssetDaemon(interval_seconds=42)._run_iteration_impl(  # noqa: SLF001
-                            workspace_context, debug_crash_flags or {}
+                            workspace_context,
+                            threadpool_executor=None,
+                            amp_tick_futures={},
+                            last_submit_times={},
+                            debug_crash_flags=(debug_crash_flags or {}),
                         )
                     )
 

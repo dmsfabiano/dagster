@@ -57,9 +57,9 @@ from dagster._core.test_utils import (
 )
 from dagster._core.types.loadable_target_origin import LoadableTargetOrigin
 from dagster._daemon.asset_daemon import (
-    CURSOR_KEY,
-    FIXED_AUTO_MATERIALIZATION_ORIGIN_ID,
-    FIXED_AUTO_MATERIALIZATION_SELECTOR_ID,
+    _PRE_EVALUATION_GROUP_CURSOR_KEY,
+    _PRE_EVALUATION_GROUP_ORIGIN_ID,
+    _PRE_EVALUATION_GROUP_SELECTOR_ID,
     AssetDaemon,
     get_current_evaluation_id,
 )
@@ -354,17 +354,19 @@ class AssetDaemonScenarioState(NamedTuple):
             assert (
                 workspace.get_code_location_error("test_location") is None
             ), workspace.get_code_location_error("test_location")
-
             list(
                 AssetDaemon(interval_seconds=42)._run_iteration_impl(  # noqa: SLF001
                     workspace_context,
-                    {},
+                    threadpool_executor=None,
+                    amp_tick_futures={},
+                    last_submit_times={},
+                    debug_crash_flags={},
                 )
             )
             new_cursor = AssetDaemonCursor.from_serialized(
-                self.instance.daemon_cursor_storage.get_cursor_values({CURSOR_KEY}).get(
-                    CURSOR_KEY, AssetDaemonCursor.empty().serialize()
-                ),
+                self.instance.daemon_cursor_storage.get_cursor_values(
+                    {_PRE_EVALUATION_GROUP_CURSOR_KEY}
+                ).get(_PRE_EVALUATION_GROUP_CURSOR_KEY, AssetDaemonCursor.empty().serialize()),
                 self.asset_graph,
             )
             new_run_requests = [
@@ -411,8 +413,8 @@ class AssetDaemonScenarioState(NamedTuple):
         """
         latest_tick = sorted(
             self.instance.get_ticks(
-                origin_id=FIXED_AUTO_MATERIALIZATION_ORIGIN_ID,
-                selector_id=FIXED_AUTO_MATERIALIZATION_SELECTOR_ID,
+                origin_id=_PRE_EVALUATION_GROUP_ORIGIN_ID,
+                selector_id=_PRE_EVALUATION_GROUP_SELECTOR_ID,
             ),
             key=lambda tick: tick.tick_id,
         )[-1]
@@ -468,7 +470,7 @@ class AssetDaemonScenarioState(NamedTuple):
         """Additional assertions for daemon mode. Checks that the evaluation for the given asset
         contains the expected run ids.
         """
-        current_evaluation_id = check.not_none(get_current_evaluation_id(self.instance))
+        current_evaluation_id = check.not_none(get_current_evaluation_id(self.instance, None))
         new_run_ids_for_asset = {
             run.run_id
             for run in self.instance.get_runs(

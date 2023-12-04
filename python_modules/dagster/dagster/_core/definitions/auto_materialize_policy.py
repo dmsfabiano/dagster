@@ -62,7 +62,6 @@ class AutoMaterializePolicy(
         [
             ("rules", FrozenSet["AutoMaterializeRule"]),
             ("max_materializations_per_minute", Optional[int]),
-            ("automator_name", Optional[str]),
         ],
     )
 ):
@@ -125,7 +124,6 @@ class AutoMaterializePolicy(
         cls,
         rules: AbstractSet["AutoMaterializeRule"],
         max_materializations_per_minute: Optional[int] = 1,
-        automator_name: Optional[str] = None,
     ):
         from dagster._core.definitions.auto_materialize_rule import AutoMaterializeRule
 
@@ -139,7 +137,6 @@ class AutoMaterializePolicy(
             cls,
             rules=frozenset(check.set_param(rules, "rules", of_type=AutoMaterializeRule)),
             max_materializations_per_minute=max_materializations_per_minute,
-            automator_name=check.opt_str_param(automator_name, "automator_name"),
         )
 
     @property

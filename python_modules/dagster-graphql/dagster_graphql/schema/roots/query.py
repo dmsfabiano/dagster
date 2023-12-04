@@ -522,7 +522,6 @@ class GrapheneQuery(graphene.ObjectType):
         statuses=graphene.List(graphene.NonNull(GrapheneInstigationTickStatus)),
         beforeTimestamp=graphene.Float(),
         afterTimestamp=graphene.Float(),
-        automatorName=graphene.String(),
         description="Fetch the history of auto-materialization ticks",
     )
 
@@ -1103,18 +1102,20 @@ class GrapheneQuery(graphene.ObjectType):
         statuses=None,
         beforeTimestamp=None,
         afterTimestamp=None,
-        automatorName=None,
     ):
+        # TODO GraphQL API that fetches all available auto-materialize sensors
+        # and provides a way to fetch ticks for them - this top-level API only
+        # returns the legacy single evaluation group sensors
         from dagster._daemon.asset_daemon import (
-            get_amp_origin_id,
-            get_amp_selector_id,
+            _PRE_EVALUATION_GROUP_ORIGIN_ID,
+            _PRE_EVALUATION_GROUP_SELECTOR_ID,
         )
 
         return get_instigation_ticks(
             graphene_info=graphene_info,
             instigator_type=InstigatorType.AUTO_MATERIALIZE,
-            instigator_origin_id=get_amp_origin_id(automatorName),
-            selector_id=get_amp_selector_id(automatorName),
+            instigator_origin_id=_PRE_EVALUATION_GROUP_ORIGIN_ID,
+            selector_id=_PRE_EVALUATION_GROUP_SELECTOR_ID,
             batch_loader=None,
             dayRange=dayRange,
             dayOffset=dayOffset,

@@ -382,7 +382,7 @@ def dagster_instance_config_schema() -> Mapping[str, Field]:
                         "How many threads to use to process ticks from multiple asset automators in parallel"
                     ),
                 ),
-                "use_asset_automators": Field(Bool, is_required=False, default_value=False),
+                "use_asset_policy_sensors": Field(Bool, is_required=False, default_value=False),
             }
         ),
     }

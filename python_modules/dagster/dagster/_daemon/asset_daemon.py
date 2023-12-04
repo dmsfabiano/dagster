@@ -6,14 +6,18 @@ from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from types import TracebackType
-from typing import Dict, Optional, Sequence, Set, Tuple, Type
+from typing import Dict, Optional, Sequence, Tuple, Type, cast
 
 import pendulum
 
 import dagster._check as check
 from dagster._core.definitions.asset_daemon_context import AssetDaemonContext
 from dagster._core.definitions.asset_daemon_cursor import AssetDaemonCursor
+from dagster._core.definitions.events import AssetKey
 from dagster._core.definitions.external_asset_graph import ExternalAssetGraph
+from dagster._core.definitions.repository_definition.valid_definitions import (
+    SINGLETON_REPOSITORY_NAME,
+)
 from dagster._core.definitions.run_request import (
     InstigatorType,
     RunRequest,
@@ -27,8 +31,14 @@ from dagster._core.host_representation.external import (
     ExternalExecutionPlan,
     ExternalJob,
 )
+from dagster._core.host_representation.origin import (
+    ExternalInstigatorOrigin,
+)
 from dagster._core.instance import DagsterInstance
 from dagster._core.scheduler.instigation import (
+    AutoMaterializeInstigatorData,
+    InstigatorState,
+    InstigatorStatus,
     InstigatorTick,
     TickData,
     TickStatus,
@@ -50,7 +60,7 @@ from dagster._utils import (
 )
 from dagster._utils.error import serializable_error_info_from_exc_info
 
-_CURSOR_KEY = "ASSET_DAEMON_CURSOR"
+_PRE_EVALUATION_GROUP_CURSOR_KEY = "ASSET_DAEMON_CURSOR"
 ASSET_DAEMON_PAUSED_KEY = "ASSET_DAEMON_PAUSED"
 
 EVALUATIONS_TTL_DAYS = 30
@@ -60,32 +70,13 @@ EVALUATIONS_TTL_DAYS = 30
 # there's an old in-progress tick left to finish that may no longer be correct to finish)
 MAX_TIME_TO_RESUME_TICK_SECONDS = 60 * 60 * 24
 
-_FIXED_AUTO_MATERIALIZATION_ORIGIN_ID = "asset_daemon_origin"
-_FIXED_AUTO_MATERIALIZATION_SELECTOR_ID = "asset_daemon_selector"
-_FIXED_AUTO_MATERIALIZATION_INSTIGATOR_NAME = "asset_daemon"
+_PRE_EVALUATION_GROUP_ORIGIN_ID = "asset_daemon_origin"
+_PRE_EVALUATION_GROUP_SELECTOR_ID = "asset_daemon_selector"
+_PRE_EVALUATION_GROUP_INSTIGATOR_NAME = "asset_daemon"
 
 MIN_INTERVAL_LOOP_TIME = 5
 
-
-def get_amp_origin_id(automator_name: Optional[str]) -> str:
-    if not automator_name:
-        return _FIXED_AUTO_MATERIALIZATION_ORIGIN_ID
-    else:
-        return f"{_FIXED_AUTO_MATERIALIZATION_ORIGIN_ID}_{automator_name}"
-
-
-def get_amp_selector_id(automator_name: Optional[str]) -> str:
-    if not automator_name:
-        return _FIXED_AUTO_MATERIALIZATION_SELECTOR_ID
-    else:
-        return f"{_FIXED_AUTO_MATERIALIZATION_SELECTOR_ID}_{automator_name}"
-
-
-def get_amp_instigator_name(automator_name: Optional[str]) -> str:
-    if not automator_name:
-        return _FIXED_AUTO_MATERIALIZATION_INSTIGATOR_NAME
-    else:
-        return automator_name
+DEFAULT_INSTIGATOR_NAME = "__default__"
 
 
 def get_auto_materialize_paused(instance: DagsterInstance) -> bool:
@@ -103,20 +94,44 @@ def set_auto_materialize_paused(instance: DagsterInstance, paused: bool):
     )
 
 
-def get_cursor_key(group_name: Optional[str]):
-    return _CURSOR_KEY if not group_name else f"{_CURSOR_KEY}:{group_name}"
+def _get_pre_evaluation_group_raw_cursor(instance: DagsterInstance) -> Optional[str]:
+    return instance.daemon_cursor_storage.get_cursor_values({_PRE_EVALUATION_GROUP_CURSOR_KEY}).get(
+        _PRE_EVALUATION_GROUP_CURSOR_KEY
+    )
 
 
-def _get_raw_cursor(instance: DagsterInstance, group_name: Optional[str]) -> Optional[str]:
-    key = get_cursor_key(group_name)
+def get_instigator_origin_for_asset_key(
+    asset_key: AssetKey, asset_graph: ExternalAssetGraph
+) -> Optional[ExternalInstigatorOrigin]:
+    # This will change to include user-defined evaluation groups once those can be set in code.
+    # For now, every repository with at least one asset with an AMP policy also contains a
+    # single instigator called DEFAULT_INSTIGATOR_NAME - every asset with an AMP policy in that
+    # repository is considered part of it
+    if not asset_graph.auto_materialize_policies_by_key.get(asset_key):
+        return None
 
-    return instance.daemon_cursor_storage.get_cursor_values({key}).get(key)
+    repo_handle = asset_graph.get_repository_handle(asset_key)
+    return ExternalInstigatorOrigin(
+        external_repository_origin=repo_handle.get_external_origin(),
+        instigator_name=DEFAULT_INSTIGATOR_NAME,
+    )
 
 
 def get_current_evaluation_id(
-    instance: DagsterInstance, automator_name: Optional[str]
+    instance: DagsterInstance, group_origin: Optional[ExternalInstigatorOrigin]
 ) -> Optional[int]:
-    raw_cursor = _get_raw_cursor(instance, automator_name)
+    if not group_origin:
+        raw_cursor = _get_pre_evaluation_group_raw_cursor(instance)
+    else:
+        instigator_state = check.not_none(instance.schedule_storage).get_instigator_state(
+            group_origin.get_id(), group_origin.get_selector().get_id()
+        )
+        raw_cursor = (
+            cast(AutoMaterializeInstigatorData, instigator_state.instigator_data).serialized_cursor
+            if instigator_state
+            else None
+        )
+
     return AssetDaemonCursor.get_evaluation_id_from_serialized(raw_cursor) if raw_cursor else None
 
 
@@ -124,7 +139,7 @@ class AutoMaterializeLaunchContext:
     def __init__(
         self,
         tick: InstigatorTick,
-        group_name: Optional[str],
+        group_origin: Optional[ExternalInstigatorOrigin],
         instance: DagsterInstance,
         logger: logging.Logger,
         tick_retention_settings,
@@ -132,7 +147,7 @@ class AutoMaterializeLaunchContext:
         self._tick = tick
         self._logger = logger
         self._instance = instance
-        self._group_name = group_name
+        self._group_origin = group_origin
 
         self._purge_settings = defaultdict(set)
         for status, day_offset in tick_retention_settings.items():
@@ -214,8 +229,16 @@ class AutoMaterializeLaunchContext:
             if day_offset <= 0:
                 continue
             self._instance.purge_ticks(
-                get_amp_origin_id(self._group_name),
-                get_amp_selector_id(self._group_name),
+                (
+                    self._group_origin.get_id()
+                    if self._group_origin
+                    else _PRE_EVALUATION_GROUP_ORIGIN_ID
+                ),
+                (
+                    self._group_origin.get_selector().get_id()
+                    if self._group_origin
+                    else _PRE_EVALUATION_GROUP_SELECTOR_ID
+                ),
                 before=pendulum.now("UTC").subtract(days=day_offset).timestamp(),
                 tick_statuses=list(statuses),
             )
@@ -246,21 +269,23 @@ class AssetDaemon(DagsterDaemon):
     ):
         # Find the largest stored evaluation ID across all cursors
         with self._evaluation_id_lock:
-            all_auto_materialize_states = instance.schedule_storage.all_instigator_state(
-                instigator_type=InstigatorType.AUTO_MATERIALIZE
-            )
-
-            group_names = {
-
-            }
-
-            raw_cursor =
-
+            all_auto_materialize_states = check.not_none(
+                instance.schedule_storage
+            ).all_instigator_state(instigator_type=InstigatorType.AUTO_MATERIALIZE)
             self._next_evaluation_id = 0
-            for group_name in {*group_names, None}:
-                raw_cursor = _get_raw_cursor(instance, group_name)
-                if not raw_cursor:
-                    continue
+            for auto_materialize_state in all_auto_materialize_states:
+                raw_cursor = cast(
+                    AutoMaterializeInstigatorData, auto_materialize_state.instigator_data
+                ).serialized_cursor
+                if raw_cursor:
+                    stored_evaluation_id = AssetDaemonCursor.from_serialized(
+                        raw_cursor,
+                        asset_graph,
+                    ).evaluation_id
+                    self._next_evaluation_id = max(self._next_evaluation_id, stored_evaluation_id)
+
+            raw_cursor = _get_pre_evaluation_group_raw_cursor(instance)
+            if raw_cursor:
                 stored_cursor = AssetDaemonCursor.from_serialized(raw_cursor, asset_graph)
                 self._next_evaluation_id = max(
                     self._next_evaluation_id, stored_cursor.evaluation_id
@@ -344,13 +369,6 @@ class AssetDaemon(DagsterDaemon):
 
         instance: DagsterInstance = workspace_process_context.instance
         settings = instance.get_settings("auto_materialize")
-        group_names: Set[Optional[str]]
-
-        if settings.get("use_asset_automators"):
-            # TODO This will come from the policies, not the asset groups
-            group_names = set(asset_graph.group_names_by_key.values())
-        else:
-            group_names = {None}  # None = all assets
 
         now = time.time()
 
@@ -362,62 +380,127 @@ class AssetDaemon(DagsterDaemon):
             self._initialize_evaluation_id(instance, asset_graph)
             self._initialized_evaluation_id = True
 
-        for group_name in group_names:
-            # TODO more granular on/off
+        group_origins: Sequence[Optional[ExternalInstigatorOrigin]]
+
+        if settings.get("use_asset_policy_sensors"):
+            # TODO This will include user-defined evaluation groups once there is a
+            # user-facing way to set them. For now, every repository with at least one
+            # asset with an AMP policy or auto-observe interval gets a group for that repository
+
+            origins_dict = {}
+
+            for asset_key, policy in asset_graph.auto_materialize_policies_by_key.items():
+                if not policy:
+                    continue
+                origin = get_instigator_origin_for_asset_key(asset_key, asset_graph)
+                if origin:
+                    origins_dict[origin.get_id()] = origin
+
+            for asset_key in asset_graph.source_asset_keys:
+                if asset_graph.get_auto_observe_interval_minutes(asset_key) is not None:
+                    continue
+
+                origin = get_instigator_origin_for_asset_key(asset_key, asset_graph)
+                if origin:
+                    origins_dict[origin.get_id()] = origin
+
+            all_auto_materialize_states = {
+                sensor_state.selector_id: sensor_state
+                for sensor_state in instance.all_instigator_state(
+                    instigator_type=InstigatorType.AUTO_MATERIALIZE
+                )
+            }
+            group_origins = list(origins_dict.values())
+
+            # TODO Adapt stored legacy cursor into per-evaluation-group cursors the first time AMP is run
+            # using evaluation groups
+        else:
+            group_origins = [None]  # None = all assets
+            all_auto_materialize_states = {}
+
+        for group_origin in group_origins:
+            group_selector_id = group_origin.get_selector().get_id() if group_origin else None
+
+            auto_materialize_state = all_auto_materialize_states.get(group_selector_id)
 
             # only one tick per evaluation group can be in flight
             if threadpool_executor:
-                if group_name in amp_tick_futures and not amp_tick_futures[group_name].done():
-                    continue
-
                 if (
-                    group_name in last_submit_times
-                    and now < last_submit_times[group_name] + self._interval_seconds
+                    group_selector_id in amp_tick_futures
+                    and not amp_tick_futures[group_selector_id].done()
                 ):
                     continue
 
-                last_submit_times[group_name] = now
+                if (
+                    group_selector_id in last_submit_times
+                    and now < last_submit_times[group_selector_id] + self._interval_seconds
+                ):
+                    continue
+
+                last_submit_times[group_selector_id] = now
 
                 future = threadpool_executor.submit(
                     self._process_auto_materialize_tick,
                     workspace_process_context,
-                    group_name,
+                    group_origin,
+                    auto_materialize_state,
                     debug_crash_flags,
                 )
-                amp_tick_futures[group_name] = future
+                amp_tick_futures[group_selector_id] = future
                 yield
             else:
                 if (
-                    group_name in last_submit_times
-                    and now < last_submit_times[group_name] + self._interval_seconds
+                    group_selector_id in last_submit_times
+                    and now < last_submit_times[group_selector_id] + self._interval_seconds
                 ):
                     continue
 
-                last_submit_times[group_name] = now
+                last_submit_times[group_selector_id] = now
 
                 yield from self._process_auto_materialize_tick_generator(
-                    workspace_process_context, group_name, debug_crash_flags
+                    workspace_process_context,
+                    group_origin,
+                    auto_materialize_state,
+                    debug_crash_flags,
                 )
 
-    def _get_display_group_name(self, group_name: Optional[str]) -> str:
-        return f"evaluation group {group_name}" or "default evaluation group"
+    def _get_display_group_name(self, group_origin: Optional[ExternalInstigatorOrigin]) -> str:
+        if not group_origin:
+            return "global evaluation group"
+        else:
+            repo_name = (
+                group_origin.external_repository_origin.get_label()
+                if group_origin.external_repository_origin.repository_name
+                != SINGLETON_REPOSITORY_NAME
+                else group_origin.external_repository_origin.code_location_origin.location_name
+            )
+
+            if group_origin.instigator_name == DEFAULT_INSTIGATOR_NAME:
+                return f"default asset policy sensor in {repo_name}"
+            else:
+                return f"asset policy sensor {group_origin.instigator_name} in {repo_name}"
 
     def _process_auto_materialize_tick(
         self,
         workspace_process_context: IWorkspaceProcessContext,
-        group_name: Optional[str],
+        group_origin: Optional[ExternalInstigatorOrigin],
+        auto_materialize_instigator_state: Optional[InstigatorState],
         debug_crash_flags: SingleInstigatorDebugCrashFlags,  # TODO No longer single instigator
     ):
         return list(
             self._process_auto_materialize_tick_generator(
-                workspace_process_context, group_name, debug_crash_flags
+                workspace_process_context,
+                group_origin,
+                auto_materialize_instigator_state,
+                debug_crash_flags,
             )
         )
 
     def _process_auto_materialize_tick_generator(
         self,
         workspace_process_context: IWorkspaceProcessContext,
-        group_name: Optional[str],
+        group_origin: Optional[ExternalInstigatorOrigin],
+        auto_materialize_instigator_state: Optional[InstigatorState],
         debug_crash_flags: SingleInstigatorDebugCrashFlags,  # TODO No longer single instigator
     ):
         evaluation_time = pendulum.now("UTC")
@@ -428,27 +511,29 @@ class AssetDaemon(DagsterDaemon):
         instance: DagsterInstance = workspace_process_context.instance
         schedule_storage = check.not_none(instance.schedule_storage)
 
-        print_group_name = self._get_display_group_name(group_name)
+        print_group_name = self._get_display_group_name(group_origin)
 
         target_asset_keys = {
             target_key
             for target_key in asset_graph.materializable_asset_keys
             if asset_graph.get_auto_materialize_policy(target_key) is not None
-            # TODO Replace with evaluation group fetch once that is a thing
-            and (not group_name or asset_graph.get_group_name(target_key) == group_name)
+            and (
+                not group_origin
+                or get_instigator_origin_for_asset_key(target_key, asset_graph) == group_origin
+            )
         }
 
         num_target_assets = len(target_asset_keys)
 
-        # TODO Where do these auto-observe assets fit? For now leave them out when things are split out by asset groups
-        if not group_name:
-            auto_observe_assets = [
-                key
-                for key in asset_graph.source_asset_keys
-                if asset_graph.get_auto_observe_interval_minutes(key) is not None
-            ]
-        else:
-            auto_observe_assets = []
+        auto_observe_assets = [
+            key
+            for key in asset_graph.source_asset_keys
+            if asset_graph.get_auto_observe_interval_minutes(key) is not None
+            and (
+                not group_origin
+                or get_instigator_origin_for_asset_key(key, asset_graph) == group_origin
+            )
+        ]
 
         num_auto_observe_assets = len(auto_observe_assets)
         has_auto_observe_assets = any(auto_observe_assets)
@@ -466,22 +551,43 @@ class AssetDaemon(DagsterDaemon):
             f" asset{'' if num_auto_observe_assets == 1 else 's'} for {print_group_name}"
         )
 
-        # TODO Adapt stored legacy cursor into a cursor for a particular gruop
+        if group_origin:
+            if not auto_materialize_instigator_state:
+                auto_materialize_instigator_state = InstigatorState(
+                    group_origin,
+                    InstigatorType.AUTO_MATERIALIZE,
+                    InstigatorStatus.AUTOMATICALLY_RUNNING,
+                    AutoMaterializeInstigatorData(
+                        serialized_cursor=AssetDaemonCursor.empty().serialize(),
+                    ),
+                )
+                instance.add_instigator_state(auto_materialize_instigator_state)
 
-        raw_cursor = _get_raw_cursor(instance, group_name)
-        stored_cursor = (
-            AssetDaemonCursor.from_serialized(raw_cursor, asset_graph)
-            if raw_cursor
-            else AssetDaemonCursor.empty()
-        )
+            raw_cursor = cast(
+                AutoMaterializeInstigatorData, auto_materialize_instigator_state.instigator_data
+            ).serialized_cursor
+            stored_cursor = AssetDaemonCursor.from_serialized(
+                check.not_none(raw_cursor), asset_graph
+            )
+            instigator_origin_id = group_origin.get_id()
+            instigator_selector_id = group_origin.get_selector().get_id()
+            instigator_name = group_origin.instigator_name
+        else:
+            raw_cursor = _get_pre_evaluation_group_raw_cursor(instance)
+            stored_cursor = (
+                AssetDaemonCursor.from_serialized(raw_cursor, asset_graph)
+                if raw_cursor
+                else AssetDaemonCursor.empty()
+            )
+            instigator_origin_id = _PRE_EVALUATION_GROUP_ORIGIN_ID
+            instigator_selector_id = _PRE_EVALUATION_GROUP_SELECTOR_ID
+            instigator_name = _PRE_EVALUATION_GROUP_INSTIGATOR_NAME
 
         tick_retention_settings = instance.get_tick_retention_settings(
             InstigatorType.AUTO_MATERIALIZE
         )
 
-        ticks = instance.get_ticks(
-            get_amp_origin_id(group_name), get_amp_selector_id(group_name), limit=1
-        )
+        ticks = instance.get_ticks(instigator_origin_id, instigator_selector_id, limit=1)
         latest_tick = ticks[0] if ticks else None
 
         max_retries = instance.auto_materialize_max_tick_retries
@@ -542,12 +648,12 @@ class AssetDaemon(DagsterDaemon):
             next_evaluation_id = self._get_next_evaluation_id()
             tick = instance.create_tick(
                 TickData(
-                    instigator_origin_id=get_amp_origin_id(group_name),
-                    instigator_name=get_amp_instigator_name(group_name),
+                    instigator_origin_id=instigator_origin_id,
+                    instigator_name=instigator_name,
                     instigator_type=InstigatorType.AUTO_MATERIALIZE,
                     status=TickStatus.STARTED,
                     timestamp=evaluation_time.timestamp(),
-                    selector_id=get_amp_selector_id(group_name),
+                    selector_id=instigator_selector_id,
                     auto_materialize_evaluation_id=next_evaluation_id,
                 )
             )
@@ -556,7 +662,7 @@ class AssetDaemon(DagsterDaemon):
 
         with AutoMaterializeLaunchContext(
             tick,
-            group_name,
+            group_origin,
             instance,
             self._logger,
             tick_retention_settings,
@@ -620,11 +726,18 @@ class AssetDaemon(DagsterDaemon):
                 tick_context.write()
                 check_for_debug_crash(debug_crash_flags, "RUN_REQUESTS_CREATED")
 
-                # Write out the persistent cursor, which ensures that future ticks will move on once
-                # they determine that nothing needs to be retried
-                instance.daemon_cursor_storage.set_cursor_values(
-                    {get_cursor_key(group_name): new_cursor.serialize()}
-                )
+                if group_origin:
+                    instance.update_instigator_state(
+                        check.not_none(auto_materialize_instigator_state).with_data(
+                            AutoMaterializeInstigatorData(serialized_cursor=new_cursor.serialize())
+                        )
+                    )
+                else:
+                    # Write out the persistent cursor, which ensures that future ticks will move on once
+                    # they determine that nothing needs to be retried
+                    instance.daemon_cursor_storage.set_cursor_values(
+                        {_PRE_EVALUATION_GROUP_CURSOR_KEY: new_cursor.serialize()}
+                    )
 
                 check_for_debug_crash(debug_crash_flags, "CURSOR_UPDATED")
 

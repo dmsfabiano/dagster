@@ -851,21 +851,25 @@ class GrapheneAssetNode(graphene.ObjectType):
         return None
 
     def resolve_currentAutoMaterializeEvaluationId(self, graphene_info):
-        from dagster._daemon.asset_daemon import get_current_evaluation_id
+        from dagster._daemon.asset_daemon import (
+            get_current_evaluation_id,
+            get_instigator_origin_for_asset_key,
+        )
 
         instance = graphene_info.context.instance
         settings = instance.get_settings("auto_materialize")
-        if settings.get("use_asset_automators"):
-            policy = self._external_asset_node.auto_materialize_policy
-            if not policy:
+        if settings.get("use_asset_policy_sensors"):
+            asset_graph = ExternalAssetGraph.from_external_repository(self._external_repository)
+            asset_key = self._external_asset_node.asset_key
+
+            instigator_origin = get_instigator_origin_for_asset_key(asset_key, asset_graph)
+
+            if not instigator_origin:
                 return None
 
-            automator_name = policy.automator_name or self._repository_location.name
-            return get_current_evaluation_id(
-                graphene_info.context.instance, automator_name=automator_name
-            )
+            return get_current_evaluation_id(graphene_info.context.instance, instigator_origin)
         else:
-            return get_current_evaluation_id(graphene_info.context.instance, automator_name=None)
+            return get_current_evaluation_id(graphene_info.context.instance, None)
 
     def resolve_backfillPolicy(
         self, _graphene_info: ResolveInfo

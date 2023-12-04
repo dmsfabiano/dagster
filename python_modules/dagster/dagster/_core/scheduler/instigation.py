@@ -27,7 +27,9 @@ from dagster._utils import datetime_as_float, xor
 from dagster._utils.error import SerializableErrorInfo
 from dagster._utils.merger import merge_dicts
 
-InstigatorData: TypeAlias = Union["ScheduleInstigatorData", "SensorInstigatorData"]
+InstigatorData: TypeAlias = Union[
+    "ScheduleInstigatorData", "SensorInstigatorData", "AutoMaterializeInstigatorData"
+]
 
 
 @whitelist_for_serdes(old_storage_names={"JobStatus"})
