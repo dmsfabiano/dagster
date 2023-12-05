@@ -1031,6 +1031,10 @@ class PartitionsSubset(ABC, Generic[T_str]):
     def to_serializable_subset(self) -> "PartitionsSubset":
         return self
 
+    @property
+    def is_serializable(self) -> bool:
+        return False
+
 
 @whitelist_for_serdes
 class SerializedPartitionsSubset(NamedTuple):
@@ -1197,6 +1201,10 @@ class DefaultPartitionsSubset(
         cls, partitions_def: Optional[PartitionsDefinition] = None
     ) -> "DefaultPartitionsSubset":
         return cls()
+
+    @property
+    def is_serializable(self) -> bool:
+        return True
 
 
 class AllPartitionsSubset(
