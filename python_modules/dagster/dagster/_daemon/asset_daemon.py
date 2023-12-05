@@ -27,6 +27,7 @@ from dagster._core.errors import (
     DagsterCodeLocationLoadError,
     DagsterUserCodeUnreachableError,
 )
+from dagster._core.host_representation import ExternalRepositoryOrigin
 from dagster._core.host_representation.external import (
     ExternalExecutionPlan,
     ExternalJob,
@@ -48,6 +49,7 @@ from dagster._core.storage.tags import (
     ASSET_EVALUATION_ID_TAG,
     AUTO_MATERIALIZE_TAG,
     AUTO_OBSERVE_TAG,
+    SENSOR_NAME_TAG,
 )
 from dagster._core.utils import InheritContextThreadPoolExecutor, make_new_run_id
 from dagster._core.workspace.context import IWorkspaceProcessContext
@@ -76,7 +78,13 @@ _PRE_EVALUATION_GROUP_INSTIGATOR_NAME = "asset_daemon"
 
 MIN_INTERVAL_LOOP_TIME = 5
 
-DEFAULT_INSTIGATOR_NAME = "__default__"
+
+def get_default_automation_policy_sensor_name(repository_origin: ExternalRepositoryOrigin):
+    return (
+        repository_origin.get_label()
+        if repository_origin.repository_name != SINGLETON_REPOSITORY_NAME
+        else repository_origin.code_location_origin.location_name
+    )
 
 
 def get_auto_materialize_paused(instance: DagsterInstance) -> bool:
@@ -105,15 +113,16 @@ def get_instigator_origin_for_asset_key(
 ) -> Optional[ExternalInstigatorOrigin]:
     # This will change to include user-defined evaluation groups once those can be set in code.
     # For now, every repository with at least one asset with an AMP policy also contains a
-    # single instigator called DEFAULT_INSTIGATOR_NAME - every asset with an AMP policy in that
+    # single sensor with a default name - every asset with an AMP policy in that
     # repository is considered part of it
     if not asset_graph.auto_materialize_policies_by_key.get(asset_key):
         return None
 
     repo_handle = asset_graph.get_repository_handle(asset_key)
+    external_repository_origin = repo_handle.get_external_origin()
     return ExternalInstigatorOrigin(
-        external_repository_origin=repo_handle.get_external_origin(),
-        instigator_name=DEFAULT_INSTIGATOR_NAME,
+        external_repository_origin=external_repository_origin,
+        instigator_name=get_default_automation_policy_sensor_name(external_repository_origin),
     )
 
 
@@ -475,7 +484,9 @@ class AssetDaemon(DagsterDaemon):
                 else group_origin.external_repository_origin.code_location_origin.location_name
             )
 
-            if group_origin.instigator_name == DEFAULT_INSTIGATOR_NAME:
+            if group_origin.instigator_name == get_default_automation_policy_sensor_name(
+                group_origin.external_repository_origin
+            ):
                 return f"default asset policy sensor in {repo_name}"
             else:
                 return f"asset policy sensor {group_origin.instigator_name} in {repo_name}"
@@ -686,6 +697,8 @@ class AssetDaemon(DagsterDaemon):
                 else:
                     evaluations_by_asset_key = {}
             else:
+                group_tags = {SENSOR_NAME_TAG: group_origin.instigator_name} if group_origin else {}
+
                 run_requests, new_cursor, evaluations = AssetDaemonContext(
                     evaluation_id=evaluation_id,
                     asset_graph=asset_graph,
@@ -694,8 +707,9 @@ class AssetDaemon(DagsterDaemon):
                     cursor=stored_cursor,
                     materialize_run_tags={
                         **instance.auto_materialize_run_tags,
+                        **group_tags,
                     },
-                    observe_run_tags={AUTO_OBSERVE_TAG: "true"},
+                    observe_run_tags={AUTO_OBSERVE_TAG: "true", **group_tags},
                     auto_observe=True,
                     respect_materialization_data_versions=instance.auto_materialize_respect_materialization_data_versions,
                     logger=self._logger,
