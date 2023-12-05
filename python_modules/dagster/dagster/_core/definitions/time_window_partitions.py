@@ -2189,10 +2189,6 @@ class TimeWindowPartitionsSubset(
             return self.with_partitions_def(partitions_def)
         return self
 
-    @property
-    def is_serializable(self) -> bool:
-        return True
-
 
 class PartitionRangeStatus(Enum):
     MATERIALIZING = "MATERIALIZING"
