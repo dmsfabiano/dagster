@@ -1407,7 +1407,7 @@ class RunProperties(NamedTuple):
     retry_number: PublicAttr[int]
 
 
-class AssetExecutionContext(OpExecutionContext):
+class AssetExecutionContext:
     def __init__(self, op_execution_context: OpExecutionContext) -> None:
         self._op_execution_context = check.inst_param(
             op_execution_context, "op_execution_context", OpExecutionContext
