@@ -16,7 +16,9 @@ from typing import (
 
 import dagster._check as check
 from dagster._config.snap import ConfigFieldSnap, ConfigSchemaSnapshot
+from dagster._core.definitions import asset_selection
 from dagster._core.definitions.asset_check_spec import AssetCheckKey
+from dagster._core.definitions.decorators.sensor_decorator import sensor
 from dagster._core.definitions.events import AssetKey
 from dagster._core.definitions.metadata import (
     MetadataValue,
@@ -178,13 +180,73 @@ class ExternalRepository:
     def get_utilized_env_vars(self) -> Mapping[str, Sequence[EnvVarConsumer]]:
         return self._utilized_env_vars
 
+
+    def get_default_automation_policy_sensor_name(self):
+        repository_origin = self.get_external_origin()
+        return (
+            repository_origin.get_label()
+            if repository_origin.repository_name != SINGLETON_REPOSITORY_NAME
+            else repository_origin.code_location_origin.location_name
+        )
+
     @property
     @cached_method
     def _external_sensors(self) -> Dict[str, "ExternalSensor"]:
-        return {
+        sensor_datas = {
             external_sensor_data.name: ExternalSensor(external_sensor_data, self._handle)
             for external_sensor_data in self.external_repository_data.external_sensor_datas
         }
+
+        if self._instance.use_asset_policy_sensors:
+            asset_graph = ExternalAssetGraph.from_external_repository(self)
+
+            existing_automation_policy_sensors = {
+                sensor_name: sensor
+                for sensor_name, sensor in sensor_datas.items()
+                if sensor.sensor_type == SensorType.AUTOMATION_POLICY
+            }
+
+            covered_asset_keys = set()
+            for sensor in existing_automation_policy_sensors:
+                covered_asset_keys = covered_asset_keys.union(
+                    sensor.asset_selection.resolve(asset_graph)
+                )
+
+            default_sensor_asset_keys = set()
+
+            for asset_key, policy in asset_graph.auto_materialize_policies_by_key.items():
+                if not policy:
+                    continue
+
+                if asset_key not in covered_asset_keys:
+                    default_sensor_asset_keys.add(asset_key)
+
+            for asset_key in asset_graph.source_asset_keys:
+                if asset_graph.get_auto_observe_interval_minutes(asset_key) is not None:
+                    continue
+
+                if asset_key not in covered_asset_keys:
+                    default_sensor_asset_keys.add(asset_key)
+
+            if default_sensor_asset_keys:
+                default_sensor_name = self.get_default_automation_policy_sensor_name()
+                default_sensor_data = ExternalSensorData(
+                    name=self.get_default_automation_policy_sensor_name(),
+                    job_name=None,
+                    op_selection=None,
+                    asset_selection=default_sensor_asset_keys,
+                    mode=None,
+                    min_interval=30,
+                    description=None,
+                    target_dict={} # ???
+                    metadata=None,
+                    default_status=None,
+                    sensor_type=SensorType.AUTOMATION_POLICY.
+                )
+                sensor_datas[default_sensor_data.name] = ExternalSensor(default_sensor_data, self._handle)
+
+        return sensor_datas
+
 
     def has_external_sensor(self, sensor_name: str) -> bool:
         return sensor_name in self._external_sensors
