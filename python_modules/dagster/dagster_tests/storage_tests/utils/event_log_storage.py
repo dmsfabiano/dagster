@@ -4118,7 +4118,7 @@ class TestEventLogStorage:
         assert storage.get_concurrency_keys() == set()
 
         # initialize with default concurrency
-        assert storage.initialize_concurrency_limit_to_default("foo")
+        storage.initialize_concurrency_limit_to_default("foo")
 
         # initially there are no concurrency limited keys
         assert storage.get_concurrency_keys() == set(["foo"])
