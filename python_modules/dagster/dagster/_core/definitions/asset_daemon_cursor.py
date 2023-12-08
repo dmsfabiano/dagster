@@ -25,7 +25,7 @@ from .asset_subset import AssetSubset
 from .partition import PartitionsSubset
 
 if TYPE_CHECKING:
-    from .asset_automation_evaluator import ConditionEvaluation
+    from .asset_condition import ConditionEvaluation
 
 
 class AssetDaemonAssetCursor(NamedTuple):
@@ -73,7 +73,7 @@ class AssetDaemonCursor(NamedTuple):
     def asset_cursor_for_key(
         self, asset_key: AssetKey, asset_graph: AssetGraph
     ) -> AssetDaemonAssetCursor:
-        from .asset_automation_evaluator import ConditionEvaluation
+        from .asset_condition import ConditionEvaluation
 
         partitions_def = asset_graph.get_partitions_def(asset_key)
         handled_partitions_subset = self.handled_root_partitions_by_asset_key.get(asset_key)
@@ -83,11 +83,9 @@ class AssetDaemonCursor(NamedTuple):
             handled_subset = AssetSubset(asset_key=asset_key, value=True)
         else:
             handled_subset = AssetSubset.empty(asset_key, partitions_def)
-        condition = (
-            check.not_none(asset_graph.get_auto_materialize_policy(asset_key))
-            .to_auto_materialize_policy_evaluator()
-            .condition
-        )
+        condition = check.not_none(
+            asset_graph.get_auto_materialize_policy(asset_key)
+        ).to_asset_condition()
         return AssetDaemonAssetCursor(
             asset_key=asset_key,
             latest_storage_id=self.latest_storage_id,
