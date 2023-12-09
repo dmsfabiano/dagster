@@ -93,7 +93,7 @@ class AssetDaemonContext:
         cursor: AssetDaemonCursor,
         materialize_run_tags: Optional[Mapping[str, str]],
         observe_run_tags: Optional[Mapping[str, str]],
-        auto_observe: bool,
+        auto_observe_asset_keys: Optional[AbstractSet[AssetKey]],
         target_asset_keys: Optional[AbstractSet[AssetKey]],
         respect_materialization_data_versions: bool,
         logger: logging.Logger,
@@ -107,14 +107,26 @@ class AssetDaemonContext:
         )
         self._data_time_resolver = CachingDataTimeResolver(self.instance_queryer)
         self._cursor = cursor
-        self._target_asset_keys = target_asset_keys or {
-            key
-            for key, policy in self.asset_graph.auto_materialize_policies_by_key.items()
-            if policy is not None
-        }
+        self._target_asset_keys = (
+            target_asset_keys
+            if target_asset_keys is not None
+            else {
+                key
+                for key, policy in self.asset_graph.auto_materialize_policies_by_key.items()
+                if policy is not None
+            }
+        )
         self._materialize_run_tags = materialize_run_tags
         self._observe_run_tags = observe_run_tags
-        self._auto_observe = auto_observe
+        self._auto_observe_asset_keys = (
+            auto_observe_asset_keys
+            if auto_observe_asset_keys is not None
+            else {
+                key
+                for key in asset_graph.source_asset_keys
+                if asset_graph.get_auto_observe_interval_minutes(key) is not None
+            }
+        )
         self._respect_materialization_data_versions = respect_materialization_data_versions
         self._logger = logger
 
@@ -388,8 +400,9 @@ class AssetDaemonContext:
                 last_observe_request_timestamp_by_asset_key=self.cursor.last_observe_request_timestamp_by_asset_key,
                 current_timestamp=observe_request_timestamp,
                 run_tags=self._observe_run_tags,
+                auto_observe_asset_keys=self._auto_observe_asset_keys,
             )
-            if self._auto_observe
+            if self._auto_observe_asset_keys
             else []
         )
 
@@ -644,9 +657,10 @@ def get_auto_observe_run_requests(
     current_timestamp: float,
     asset_graph: AssetGraph,
     run_tags: Optional[Mapping[str, str]],
+    auto_observe_asset_keys: AbstractSet[AssetKey],
 ) -> Sequence[RunRequest]:
     assets_to_auto_observe: Set[AssetKey] = set()
-    for asset_key in asset_graph.source_asset_keys:
+    for asset_key in auto_observe_asset_keys:
         last_observe_request_timestamp = last_observe_request_timestamp_by_asset_key.get(asset_key)
         auto_observe_interval_minutes = asset_graph.get_auto_observe_interval_minutes(asset_key)
 
